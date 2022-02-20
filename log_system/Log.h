@@ -8,6 +8,8 @@
 #include <cstdarg>
 #include <string.h>
 #include <time.h>
+#include <sys/stat.h>
+#include <dirent.h>
 
 class Log
 {
@@ -27,13 +29,13 @@ private:
 
     FILE* filePtr;
     char logName[256];
-
+    char dirName[256];
 //    int maxLine;
 //    long long countLine;
 
     BlockQueue<std::string> logQueue;
     
-    char* buffer;
+//    char* buffer;
     int maxBufferSize;
     std::mutex mutexLock;
 
