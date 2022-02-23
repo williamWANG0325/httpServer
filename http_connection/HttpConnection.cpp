@@ -94,12 +94,12 @@ bool HttpConnection::readToBuffer() {
     return true;
 }
 
-HttpConnection::HTTP_CODE HttpConnection::parseRequestLine(char* test) {
-    url = strpbrk(test, " \t");    
+HttpConnection::HTTP_CODE HttpConnection::parseRequestLine(char* text) {
+    url = strpbrk(text, " \t");    
     if (!url)
         return BAD_REQUEST;
     *url++ = '\0';
-    char* tmp = test;
+    char* tmp = text;
     if (strcasecmp(tmp, "GET"))
         method = GET;
     else if (strcasecmp(tmp, "POST")) 
@@ -129,5 +129,224 @@ HttpConnection::HTTP_CODE HttpConnection::parseRequestLine(char* test) {
     if (!url)
         return BAD_REQUEST;
 
+    masterState = CHECK_STATE_HEADER;
+
     return NO_REQUEST;
+}
+
+HttpConnection::HTTP_CODE HttpConnection::parseHeaders(char* text) {
+    if (text[0] == '\0'){
+        if (method == GET)
+            return GET_REQUEST;
+        masterState = CHECK_STATE_CONTENT;
+        return NO_REQUEST;
+    }
+
+    if (strncasecmp(text, "Connection:", 11) == 0)
+    {
+        text += 11;
+        text += strspn(text, " \t");
+        if (strcasecmp(text, "keep-alive") == 0)
+        {
+            keepAlive = true;
+        }
+    }
+    else if (strncasecmp(text, "Content-length:", 15) == 0)
+    {
+        text += 15;
+        text += strspn(text, " \t");
+        contentLen = atol(text);
+    }
+    else if (strncasecmp(text, "Host:", 5) == 0)
+    {
+        text += 5;
+        text += strspn(text, " \t");
+        host = text;
+    }
+    else
+    {
+        LOG_INFO("oop!unknow header: %s", text);
+    }
+    return NO_REQUEST;
+}
+
+HttpConnection::HTTP_CODE HttpConnection::parseContent(char* text) {
+    if (readIdx >= checkedIdx + contentLen) {
+        text[contentLen] = '\0';
+        content = text;
+        return GET_REQUEST;
+    }
+    return NO_REQUEST;
+}
+
+
+HttpConnection::HTTP_CODE HttpConnection::parse() {
+    LINE_STATUS lineStatus = LINE_OK;
+    HTTP_CODE ret = NO_REQUEST;
+    char* text = nullptr;
+
+    while ((masterState != CHECK_STATE_CONTENT) || ((lineStatus = parseLine()) == LINE_OK)) {
+        text = readBuffer + parsedIdx;
+        parsedIdx = checkedIdx;
+        switch (masterState) {
+            case CHECK_STATE_REQUESTLINE:{
+                ret = parseRequestLine(text);
+                if (ret == BAD_REQUEST)
+                    return ret;
+                break;
+            }
+            case CHECK_STATE_HEADER:{
+                ret = parseHeaders(text);
+                if (ret == BAD_REQUEST)
+                    return ret;
+                if (ret == GET_REQUEST) {
+                    // do request
+                }
+                break;                  
+            }
+//            case CHECK_STATE_CONTENT:{
+//                ret = parseContent(text);
+//                if (ret == GET_REQUEST) {
+//                    //do requset
+//                }
+//                lineStatus = LINE_OPEN;
+//            }
+            default:
+                return INTERNAL_ERROR;
+        }
+    }
+    if (masterState == CHECK_STATE_CONTENT) {
+        ret = parseContent(readBuffer + parsedIdx);
+        if (ret == GET_REQUEST){
+            //do request
+        }
+    }
+    if (lineStatus == LINE_BAD)
+        return BAD_REQUEST;
+    else
+        return NO_REQUEST;
+}
+
+bool HttpConnection::addResponse(const char* format, ...) {
+    if (writeIdx >= WRITE_BUFFER_SIZE - 1)
+        return false;
+    va_list tmp;
+    va_start(tmp, format);
+    int len = vsnprintf(writeBuffer + writeIdx, WRITE_BUFFER_SIZE - 1 - writeIdx, format, tmp);
+    writeIdx += len;
+    va_end(tmp);
+    return true;
+}
+bool HttpConnection::addStatusLine(int status, const char* title){
+    return addResponse("%s %d %s\r\n","HTTP/1.1",status,title);
+}
+bool HttpConnection::addContentType(char* s) {
+    char tmp[20] = "text/html";
+    if (s == nullptr)
+        s = tmp;
+    return addResponse("Content-Type:%s\r\n", s);
+}
+bool HttpConnection::addHeaders(int responseLen){
+    bool flag = true;
+    flag = flag && addResponse("Content-Length:%d\r\n", responseLen);
+    flag = flag && addResponse("Connection:%s\r\n", (keepAlive == true) ? "keep-alive" : "close");
+    flag = flag && addResponse("\r\n");
+    return flag;
+}
+
+HttpConnection::HTTP_CODE HttpConnection::doRequest() {
+    strcpy(requestFile, rootPath);
+    int len = strlen(requestFile);
+    const char* ptr = strchr(url, '/');
+    if (method == POST){
+
+    }
+    strcpy(requestFile + len, ptr);
+    if (stat(requestFile, &fileStat))
+        return NO_RESOURCE;
+    if (!(fileStat.st_mode & S_IROTH))
+        return FORBIDDEN_REQUEST;
+    if (S_ISDIR(fileStat.st_mode))
+        return BAD_REQUEST;
+
+    int tmpFd = open(requestFile, O_RDONLY);
+    mmapWriteFile = (char *) mmap(0, fileStat.st_size, PROT_READ, MAP_PRIVATE, tmpFd, 0);
+    close(fd);
+    return FILE_REQUEST;
+}
+
+void HttpConnection::unmap() {
+    if (mmapWriteFile) {
+        munmap(mmapWriteFile, fileStat.st_size);
+    }
+}
+
+bool HttpConnection::fillWriteBuffer(HttpConnection::HTTP_CODE ret) {
+    switch(ret) 
+    {
+    case FILE_REQUEST:
+        {
+            addStatusLine(200, "OK");
+            if (fileStat.st_size != 0) {
+                addHeaders(fileStat.st_size);
+
+                writeIV[0].iov_base = writeBuffer;
+                writeIV[0].iov_len = writeIdx;
+
+                writeIV[1].iov_base = mmapWriteFile;
+                writeIV[1].iov_len = fileStat.st_size;
+
+                bytesToSend = writeIdx + fileStat.st_size;
+                ivCount = 2;
+                return true;
+
+            }
+        }
+    default:
+        return false;
+    }
+    writeIV[0].iov_base = writeBuffer;
+    writeIV[0].iov_len = writeIdx;
+    ivCount = 1;
+    return true;
+
+}
+
+bool HttpConnection::write() {
+    int tmp = 0;
+//    if (bytesToSend <= 0) {
+//        resetFd(epollFd, fd, EPOLLIN, isET);
+//        init();
+//    }
+    while (true) {
+        tmp = writev(fd, writeIV, ivCount);
+        if (tmp > 0) 
+            bytesHaveSend +=tmp;
+        else {
+            if (errno == EAGAIN) {
+                if (bytesHaveSend >= (int)writeIV[0].iov_len) {
+                    writeIV[0].iov_len  = 0;
+                    writeIV[1].iov_base = mmapWriteFile + (bytesHaveSend - writeIdx);
+                    writeIV[1].iov_len = bytesToSend;
+                } else {
+                    writeIV[0].iov_base = writeBuffer + bytesHaveSend;
+                    writeIV[0].iov_len = writeIdx - bytesHaveSend;
+                }
+                resetFd(epollFd, fd, EPOLLOUT, isET);
+                return true;
+            }
+            unmap();
+            return false;
+        }
+        bytesToSend -= tmp;
+        if (bytesToSend <= 0) {
+            unmap();
+            resetFd(epollFd, fd, EPOLLIN, isET);
+            if (keepAlive) {
+                init();
+                return true;
+            }
+            return false;
+        }
+    }
 }
