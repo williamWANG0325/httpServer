@@ -1,6 +1,10 @@
 #include "HttpConnection.h"
 
 
+std::atomic_int HttpConnection::totalConnection;
+std::atomic_int HttpConnection::epollFd;
+char HttpConnection::rootPath[100];
+std::atomic_bool HttpConnection::isET;
 
 void setNonblocking(int fd) {
     int cnt = fcntl(fd, F_GETFL, 0);
@@ -36,18 +40,31 @@ void resetFd(int epollFd, int fd, int option, bool isET) {
 HttpConnection::HttpConnection():alive(false){
 }
 
-void HttpConnection::init(int epollFd_, int sockFD, const sockaddr_in & addr) {
+void HttpConnection::initStatic(int epollFD, const char* root, bool ET) {
+    totalConnection = 0;
+    epollFd = epollFD;
+    strcpy(rootPath, root);
+    isET = ET;
+    
+}
+
+void HttpConnection::init(int sockFD, const sockaddr_in & addr) {
     fd = sockFD;
+    setNonblocking(fd);
     sockAddr = addr;
-    epollFd = epollFd_;
-    addFd(epollFd, fd, isET);
+    resetFd(epollFd, fd, EPOLLIN, isET);
     alive = true;
     totalConnection++;
     LOG_INFO("Client %s:%d connect. Total connection : %d", 
              inet_ntoa(sockAddr.sin_addr), sockAddr.sin_port, totalConnection.load());
+    init();
 }
-
-
+void HttpConnection::init(){
+    //  清空所有数据
+    writeIdx = 0;
+    readIdx = 0;
+    
+}
 void HttpConnection::closeConnection() {
     alive = false;
     totalConnection--;
@@ -100,9 +117,9 @@ HttpConnection::HTTP_CODE HttpConnection::parseRequestLine(char* text) {
         return BAD_REQUEST;
     *url++ = '\0';
     char* tmp = text;
-    if (strcasecmp(tmp, "GET"))
+    if (!strcasecmp(tmp, "GET"))
         method = GET;
-    else if (strcasecmp(tmp, "POST")) 
+    else if (!strcasecmp(tmp, "POST")) 
         method = POST;
     else
         return BAD_REQUEST;
@@ -117,11 +134,11 @@ HttpConnection::HTTP_CODE HttpConnection::parseRequestLine(char* text) {
         return BAD_REQUEST;        
 
     
-    if (strncasecmp(url, "http://", 7)) {
+    if (!strncasecmp(url, "http://", 7)) {
         url += 7;
         url = strchr(url, '/');
     }
-    if (strncasecmp(url, "https://", 8)) {
+    if (!strncasecmp(url, "https://", 8)) {
         url += 8;
         url = strchr(url, '/');
     }
@@ -142,22 +159,22 @@ HttpConnection::HTTP_CODE HttpConnection::parseHeaders(char* text) {
         return NO_REQUEST;
     }
 
-    if (strncasecmp(text, "Connection:", 11) == 0)
+    if (!strncasecmp(text, "Connection:", 11))
     {
         text += 11;
         text += strspn(text, " \t");
-        if (strcasecmp(text, "keep-alive") == 0)
+        if (!strcasecmp(text, "keep-alive"))
         {
             keepAlive = true;
         }
     }
-    else if (strncasecmp(text, "Content-length:", 15) == 0)
+    else if (!strncasecmp(text, "Content-length:", 15))
     {
         text += 15;
         text += strspn(text, " \t");
         contentLen = atol(text);
     }
-    else if (strncasecmp(text, "Host:", 5) == 0)
+    else if (!strncasecmp(text, "Host:", 5))
     {
         text += 5;
         text += strspn(text, " \t");
@@ -185,7 +202,7 @@ HttpConnection::HTTP_CODE HttpConnection::parse() {
     HTTP_CODE ret = NO_REQUEST;
     char* text = nullptr;
 
-    while ((masterState != CHECK_STATE_CONTENT) || ((lineStatus = parseLine()) == LINE_OK)) {
+    while ((masterState != CHECK_STATE_CONTENT) && ((lineStatus = parseLine()) == LINE_OK)) {
         text = readBuffer + parsedIdx;
         parsedIdx = checkedIdx;
         switch (masterState) {
@@ -201,6 +218,7 @@ HttpConnection::HTTP_CODE HttpConnection::parse() {
                     return ret;
                 if (ret == GET_REQUEST) {
                     // do request
+                    return doRequest();
                 }
                 break;                  
             }
@@ -217,9 +235,10 @@ HttpConnection::HTTP_CODE HttpConnection::parse() {
     }
     if (masterState == CHECK_STATE_CONTENT) {
         ret = parseContent(readBuffer + parsedIdx);
-        if (ret == GET_REQUEST){
-            //do request
-        }
+        if (ret == GET_REQUEST)
+            return doRequest();
+        else
+            return NO_REQUEST;
     }
     if (lineStatus == LINE_BAD)
         return BAD_REQUEST;
@@ -271,7 +290,7 @@ HttpConnection::HTTP_CODE HttpConnection::doRequest() {
 
     int tmpFd = open(requestFile, O_RDONLY);
     mmapWriteFile = (char *) mmap(0, fileStat.st_size, PROT_READ, MAP_PRIVATE, tmpFd, 0);
-    close(fd);
+    close(tmpFd);
     return FILE_REQUEST;
 }
 
@@ -341,12 +360,11 @@ bool HttpConnection::write() {
         bytesToSend -= tmp;
         if (bytesToSend <= 0) {
             unmap();
-            resetFd(epollFd, fd, EPOLLIN, isET);
             if (keepAlive) {
                 init();
-                return true;
+                resetFd(epollFd, fd, EPOLLIN, isET);
             }
-            return false;
+            return true;
         }
     }
 }
