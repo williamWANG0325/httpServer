@@ -47,16 +47,17 @@ public:
 
     static std::atomic_int totalConnection;
     static std::atomic_int epollFd;
-    static const char* rootPath;
+    static char rootPath[100];
     static std::atomic_bool isET;
 
 
 public:
     HttpConnection() ;
-    ~HttpConnection() ;
+    ~HttpConnection() {};
 
-    void init(int epollFd_, int sockFd, const sockaddr_in & addr);
+    void init(int sockFd, const sockaddr_in & addr);
     void init();
+    static void initStatic(int epollFD, const char* root, bool ET);
     void closeConnection();
     
     LINE_STATUS parseLine();
@@ -78,7 +79,7 @@ public:
 
     void unmap();
 
-private:
+//private:
     int fd;
     sockaddr_in sockAddr;
     
@@ -116,5 +117,4 @@ private:
 
 
 };
-std::atomic_int HttpConnection::totalConnection = 1;
 
