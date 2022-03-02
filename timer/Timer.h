@@ -9,6 +9,7 @@
 #include <memory>
 #include <condition_variable>
 #include <thread>
+#include <future>
 
 #include "../thread_pool/ThreadPool.h"
 
@@ -78,9 +79,15 @@ int Timer::append(int waitTime, bool isPeriod, T&& fun, Args&&... args){
     timerNode.period = std::chrono::milliseconds(waitTime);
     timerNode.timePoint = std::chrono::steady_clock::now() + timerNode.period;
 
-    //timerNode.callback = [&]{bind(std::forward<T>(fun), std::forward<Args>(args)...)();};
     
-    timerNode.callback = bind(std::forward<T>(fun), std::forward<Args>(args)...);
+    std::function<decltype(fun(args ...))()> tmp = std::bind(std::forward<T>(fun), std::forward<Args>(args)...);
+
+    timerNode.callback = [=]{tmp();};
+    
+
+//本来想这么写的，但c++11好像不支持在Lamda表达式里展开可变模板参数
+//    timerNode.callback = [=]{std::bind(std::forward<T>(fun), std::forward<Args>(args)...)();};  
+    
 
     {
         std::unique_lock<std::mutex> ulock{heapLock};
