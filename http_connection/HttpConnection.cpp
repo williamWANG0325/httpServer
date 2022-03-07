@@ -1,48 +1,17 @@
 #include "HttpConnection.h"
 
 
-std::atomic_int HttpConnection::totalConnection;
-std::atomic_int HttpConnection::epollFd;
-char HttpConnection::rootPath[100];
-std::atomic_bool HttpConnection::isET;
+std::atomic_int HttpConnection::totalConnection{0};
+char HttpConnection::rootPath[100] = ".";
+std::atomic_bool HttpConnection::isET{false};
 
-void setNonblocking(int fd) {
-    int cnt = fcntl(fd, F_GETFL, 0);
-    fcntl(fd, F_SETFL, cnt | O_NONBLOCK);
-}
 
-void addFd(int epollFd, int fd, bool isET) {
-    epoll_event event;
-    event.data.fd = fd;
-    event.events = EPOLLIN | EPOLLRDHUP | EPOLLONESHOT;
-    if (isET) {
-        event.events |= EPOLLET;
-    }
-    epoll_ctl(epollFd, EPOLL_CTL_ADD, fd, &event);
-    setNonblocking(fd);//位置待定
-}
-
-void removeFd(int epollFd, int fd) {
-    epoll_ctl(epollFd, EPOLL_CTL_DEL, fd, 0);
-    close(fd);
-}
-
-void resetFd(int epollFd, int fd, int option, bool isET) {
-    epoll_event event;
-    event.data.fd = fd;
-    event.events = option | EPOLLRDHUP | EPOLLONESHOT;
-    if (isET) {
-        event.events |= EPOLLET;
-    }
-    epoll_ctl(epollFd, EPOLL_CTL_ADD, fd, &event);
-}
 
 HttpConnection::HttpConnection():alive(false){
 }
 
-void HttpConnection::initStatic(int epollFD, const char* root, bool ET) {
+void HttpConnection::initStatic(const char* root, bool ET) {
     totalConnection = 0;
-    epollFd = epollFD;
     strcpy(rootPath, root);
     isET = ET;
     
@@ -50,9 +19,7 @@ void HttpConnection::initStatic(int epollFD, const char* root, bool ET) {
 
 void HttpConnection::init(int sockFD, const sockaddr_in & addr) {
     fd = sockFD;
-    setNonblocking(fd);
     sockAddr = addr;
-    resetFd(epollFd, fd, EPOLLIN, isET);
     alive = true;
     totalConnection++;
     LOG_INFO("Client %s:%d connect. Total connection : %d", 
@@ -68,7 +35,6 @@ void HttpConnection::init(){
 void HttpConnection::closeConnection() {
     alive = false;
     totalConnection--;
-    removeFd(epollFd, fd);
     LOG_INFO("Client %s:%d quit. Total connection : %d", 
              inet_ntoa(sockAddr.sin_addr), sockAddr.sin_port, totalConnection.load());
 }
@@ -217,27 +183,23 @@ HttpConnection::HTTP_CODE HttpConnection::parse() {
                 if (ret == BAD_REQUEST)
                     return ret;
                 if (ret == GET_REQUEST) {
-                    // do request
-                    return doRequest();
+                    HTTP_CODE tmp = doRequest();
+                    fillWriteBuffer(tmp);
+                    return GET_REQUEST;
                 }
                 break;                  
             }
-//            case CHECK_STATE_CONTENT:{
-//                ret = parseContent(text);
-//                if (ret == GET_REQUEST) {
-//                    //do requset
-//                }
-//                lineStatus = LINE_OPEN;
-//            }
             default:
                 return INTERNAL_ERROR;
         }
     }
     if (masterState == CHECK_STATE_CONTENT) {
         ret = parseContent(readBuffer + parsedIdx);
-        if (ret == GET_REQUEST)
-            return doRequest();
-        else
+        if (ret == GET_REQUEST){
+            HTTP_CODE tmp = doRequest();
+            fillWriteBuffer(tmp);
+            return GET_REQUEST;
+        }else
             return NO_REQUEST;
     }
     if (lineStatus == LINE_BAD)
@@ -291,6 +253,7 @@ HttpConnection::HTTP_CODE HttpConnection::doRequest() {
     int tmpFd = open(requestFile, O_RDONLY);
     mmapWriteFile = (char *) mmap(0, fileStat.st_size, PROT_READ, MAP_PRIVATE, tmpFd, 0);
     close(tmpFd);
+
     return FILE_REQUEST;
 }
 
@@ -331,12 +294,8 @@ bool HttpConnection::fillWriteBuffer(HttpConnection::HTTP_CODE ret) {
 
 }
 
-bool HttpConnection::write() {
+HttpConnection::HTTP_CODE HttpConnection::processWrite() {
     int tmp = 0;
-//    if (bytesToSend <= 0) {
-//        resetFd(epollFd, fd, EPOLLIN, isET);
-//        init();
-//    }
     while (true) {
         tmp = writev(fd, writeIV, ivCount);
         if (tmp > 0) 
@@ -351,20 +310,28 @@ bool HttpConnection::write() {
                     writeIV[0].iov_base = writeBuffer + bytesHaveSend;
                     writeIV[0].iov_len = writeIdx - bytesHaveSend;
                 }
-                resetFd(epollFd, fd, EPOLLOUT, isET);
-                return true;
+   //             resetFd(epollFd, fd, EPOLLOUT, isET);
+                return INCOMPLETE_WRITE;
             }
             unmap();
-            return false;
+            return INTERNAL_ERROR;
         }
         bytesToSend -= tmp;
         if (bytesToSend <= 0) {
             unmap();
             if (keepAlive) {
                 init();
-                resetFd(epollFd, fd, EPOLLIN, isET);
+   //             resetFd(epollFd, fd, EPOLLIN, isET);
+                return KEEP_ALIVE;
             }
-            return true;
+            return COMPLETE_WRITE;
         }
     }
 }
+
+
+HttpConnection::HTTP_CODE HttpConnection::processRead(){
+    readToBuffer();
+    return parse();
+}
+
