@@ -6,7 +6,6 @@
 #include <atomic>
 #include <fcntl.h>
 #include <unistd.h>
-#include <sys/epoll.h>
 #include <cstring>
 #include <cstdarg>
 #include <sys/stat.h>
@@ -33,7 +32,9 @@ public:
         FORBIDDEN_REQUEST,
         FILE_REQUEST,
         INTERNAL_ERROR,
-        CLOSED_CONNECTION
+        INCOMPLETE_WRITE,
+        KEEP_ALIVE,
+        COMPLETE_WRITE
     };
     enum CHECK_STATE{
         CHECK_STATE_REQUESTLINE,
@@ -46,7 +47,6 @@ public:
     static const int WRITE_BUFFER_SIZE = 1024;
 
     static std::atomic_int totalConnection;
-    static std::atomic_int epollFd;
     static char rootPath[100];
     static std::atomic_bool isET;
 
@@ -56,30 +56,38 @@ public:
     ~HttpConnection() {};
 
     void init(int sockFd, const sockaddr_in & addr);
-    void init();
-    static void initStatic(int epollFD, const char* root, bool ET);
+
+    static void initStatic(const char* root, bool ET);
+
     void closeConnection();
+
+    HTTP_CODE processRead();
+    HTTP_CODE processWrite();
     
-    LINE_STATUS parseLine();
+private:
+    void init();
+    
     bool readToBuffer();
     
+    LINE_STATUS parseLine();
+
     HTTP_CODE parseRequestLine(char *text);
     HTTP_CODE parseHeaders(char* text);
     HTTP_CODE parseContent(char* text);
     HTTP_CODE parse();
 
-    bool write();
     HTTP_CODE doRequest();
-    bool fillWriteBuffer(HTTP_CODE ret);
 
+    bool fillWriteBuffer(HTTP_CODE ret);
     bool addResponse(const char* format, ...) ;
     bool addStatusLine(int status, const char* title);
     bool addContentType(char* s = nullptr) ;
     bool addHeaders(int responseLen);
-
+    
+ 
     void unmap();
 
-//private:
+private:
     int fd;
     sockaddr_in sockAddr;
     
