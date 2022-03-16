@@ -35,13 +35,18 @@ private:
 
     BlockQueue<std::string> logQueue;
     
-//    char* buffer;
     int maxBufferSize;
     std::mutex mutexLock;
 
     std::atomic_int today;
     std::thread writer;
-
-
 };
+
+#define LOG_BASE(level, format, ...) \
+    do {Log::getInstence()->writeLog(level, format, ##__VA_ARGS__);} while(0);
+
+#define LOG_DEBUG(format, ...) do {LOG_BASE(0, format, ##__VA_ARGS__)} while(0)
+#define LOG_INFO(format, ...) do {LOG_BASE(1, format, ##__VA_ARGS__)} while(0)
+#define LOG_WARN(format, ...) do {LOG_BASE(2, format, ##__VA_ARGS__)} while(0)
+#define LOG_ERROR(format, ...) do {LOG_BASE(3, format, ##__VA_ARGS__)} while(0)
 
