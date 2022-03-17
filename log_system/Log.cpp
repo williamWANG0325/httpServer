@@ -38,6 +38,7 @@ void Log::writeLogToFile() {
     while (logQueue.get(singleLog)) {
         std::unique_lock<std::mutex> myLock{mutexLock};
         fputs(singleLog.c_str(), filePtr);
+        //fflush(filePtr);
     }
 }
 
@@ -90,7 +91,7 @@ void Log::writeLog(int level, const char* format, ...) {
     int len2 = vsnprintf(buffer + len1, maxBufferSize - 1, format, valst);
     buffer[len1 + len2] = '\n';
     buffer[len1 + len2] = '\0';
-    logQueue.push(buffer);
+    logQueue.push(std::string(buffer));
     delete []buffer;
 
 }
