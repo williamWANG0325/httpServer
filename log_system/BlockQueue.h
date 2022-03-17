@@ -12,12 +12,12 @@ class BlockQueue
 public:
     BlockQueue(int maxSize = 10000):maxSize_(maxSize), alive(true) {}
     ~BlockQueue() {}
-    bool push(T task) {
+    bool push(T&& task) {
         std::unique_lock<std::mutex> myLock{mutexLock};
         producerCV.wait(myLock, [&]{return taskQueue.size() < maxSize_ || !alive;});
         if(!alive)
             return false;
-        taskQueue.push(task);
+        taskQueue.emplace(std::forward<T>(task));
         consumerCV.notify_one();
         return true;
     }
