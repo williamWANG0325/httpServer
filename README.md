@@ -25,4 +25,5 @@
   - [数据库连接池](https://github.com/williamWANG0325/httpServer/blob/main/sql_pool/%E6%95%B0%E6%8D%AE%E5%BA%93%E8%BF%9E%E6%8E%A5%E6%B1%A0.md)
   - [阻塞队列](https://github.com/williamWANG0325/httpServer/blob/main/log_system/%E9%98%BB%E5%A1%9E%E9%98%9F%E5%88%97.md)
   - [日志系统](https://github.com/williamWANG0325/httpServer/blob/main/log_system/%E6%97%A5%E5%BF%97%E7%B3%BB%E7%BB%9F.md)
+  - [http报文处理类](https://github.com/williamWANG0325/httpServer/blob/main/http_connection/http%E6%8A%A5%E6%96%87%E5%A4%84%E7%90%86%E7%B1%BB.md)
   - ...(还有一些没有完善好)
